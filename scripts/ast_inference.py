@@ -123,7 +123,9 @@ def run_raw_audio_inference(
 
     output_rows = []
     batch_ranges = range(0, len(clip_rows), args.batch_size)
-    id2label = {int(label_id): label for label_id, label in model.config.id2label.items()}
+    id2label = {
+        int(label_id): label for label_id, label in model.config.id2label.items()  # ty: ignore
+    }
     for start in tqdm(batch_ranges, desc="Running inference", file=sys.stderr):
         batch_rows = clip_rows[start : start + args.batch_size]
         input_values = torch.stack([row["input_values"] for row in batch_rows]).to(
