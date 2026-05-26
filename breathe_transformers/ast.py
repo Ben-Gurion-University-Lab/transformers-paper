@@ -1,4 +1,4 @@
-"""Reusable AST preparation and model helpers."""
+"""AST data preparation and model helpers."""
 
 from pathlib import Path
 from typing import Any
@@ -9,7 +9,11 @@ import torchaudio
 from tqdm import tqdm
 from transformers import ASTFeatureExtractor, ASTForAudioClassification
 
-from breathe_transformers.audio_utils import get_5sec_clips, trim_and_norm
+from breathe_transformers.audio_utils import (
+    get_5sec_clips,
+    load_audio_waveform,
+    trim_and_norm,
+)
 from breathe_transformers.datasets import ASTDataset, ASTDatasetConfig
 from breathe_transformers.torch_utils import get_default_device
 
@@ -17,8 +21,8 @@ __all__ = [
     "ASTDataset",
     "ASTDatasetConfig",
     "custom_collate",
+    "extract_ast_audio_features",
     "load_ast_model",
-    "predict_ast_batch",
     "prepare_ast_dataset_5sec",
     "resolve_audio_path",
 ]
@@ -37,7 +41,7 @@ AUDIO_EXTENSIONS = (".wav", ".flac", ".mp3", ".ogg", ".m4a")
 
 
 def resolve_audio_path(row: pd.Series, audio_base_path: str) -> Path:
-    """Resolve a local audio path from a metadata row."""
+    """Resolve audio by known path columns, then id-based filenames."""
     base_path = Path(audio_base_path)
     for column in AUDIO_PATH_COLUMNS:
         if column in row and pd.notna(row[column]):  # ty: ignore
@@ -183,11 +187,45 @@ def load_ast_model(
     return model, label_mapping
 
 
-def predict_ast_batch(
-    model: ASTForAudioClassification,
-    batch: dict[str, torch.Tensor],
-) -> torch.Tensor:
-    """Predict one AST batch."""
-    with torch.no_grad():
-        outputs = model(batch["input_values"])
-        return torch.argmax(outputs.logits, dim=-1)
+def extract_ast_audio_features(
+    audio_path: str | Path,
+    feature_extractor: ASTFeatureExtractor,
+    sampling_rate: int = 16000,
+    overlap_percent: int = 25,
+    trimmed_seconds: int = 2,
+) -> list[dict[str, Any]]:
+    """Resample, trim, split, and featurize one audio file into timed AST rows."""
+    audio_path = Path(audio_path)
+    waveform, original_sample_rate = load_audio_waveform(audio_path)
+
+    if original_sample_rate != sampling_rate:
+        resampler = torchaudio.transforms.Resample(original_sample_rate, sampling_rate)
+        waveform = resampler(waveform)
+
+    waveform = waveform.mean(dim=0).unsqueeze(0)  # Convert to mono
+    trimmed = trim_and_norm(
+        waveform.numpy()[0],
+        sample_rate=sampling_rate,
+        trimmed_seconds=trimmed_seconds,
+        max_deviations=int(feature_extractor.std),
+    )
+
+    rows = []
+    for clip_idx, (clip, start_seconds, end_seconds) in enumerate(
+        get_5sec_clips(
+            trimmed,
+            sampling_rate,
+            overlap_percent,
+            return_segments=True,
+        )
+    ):
+        inputs = feature_extractor(clip, sampling_rate=sampling_rate, return_tensors="pt")
+        rows.append(
+            {
+                "input_values": inputs["input_values"].squeeze(0),
+                "clip_index": clip_idx,
+                "start_seconds": start_seconds + trimmed_seconds,
+                "end_seconds": end_seconds + trimmed_seconds,
+            }
+        )
+    return rows

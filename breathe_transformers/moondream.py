@@ -15,11 +15,21 @@ from peft.peft_model import PeftModel  # ty: ignore
 from PIL import Image
 from safetensors.torch import load_file
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    dynamic_module_utils,
+)
+from transformers.cache_utils import DynamicCache
 from transformers.generation.utils import GenerationMixin
 
 from breathe_transformers.ast import resolve_audio_path
-from breathe_transformers.audio_utils import get_5sec_clips, trim_and_norm
+from breathe_transformers.audio_utils import (
+    get_5sec_clips,
+    load_audio_waveform,
+    trim_and_norm,
+)
 from breathe_transformers.torch_utils import get_default_device
 
 
@@ -27,45 +37,35 @@ BASE_MODEL = "vikhyatk/moondream2"
 MODEL_REVISION = "2024-08-26"
 WINDOW_WIDTHS = [0.025, 0.1, 0.175]
 SAMPLING_RATE = 16000
-RECORD_POINT_TRANSLATIONS = {
-    "второе межреберье": "second intercostal space",
-    "грудная клетка сзади": "posterior thoracic rib",
-    "ротовая полость": "oral cavity and pharynx",
-    "трахея": "trachea",
-    "second intercostal space": "second intercostal space",
-    "chest from behind": "posterior thoracic rib",
-    "posterior thoracic rib": "posterior thoracic rib",
-    "oral cavity": "oral cavity and pharynx",
-    "trachea": "trachea",
-}
 
 
-def _first_available(row: pd.Series, columns: tuple[str, ...]) -> Any:
-    for column in columns:
-        if column in row and pd.notna(row[column]):  # ty: ignore
-            return row[column]
-    return None
+def _metadata_value(row: pd.Series, column: str) -> Any:
+    """Return a pandas metadata value as a plain Python scalar when possible."""
+    value = row[column]
+    return value.item() if isinstance(value, np.generic) else value  # ty: ignore
+
+
+def _is_hf_snapshot_cached(cache_dir: str, model_name: str, revision: str) -> bool:
+    """Return whether a Hugging Face snapshot ref exists in the local cache."""
+    repo_cache = Path(cache_dir) / f"models--{model_name.replace('/', '--')}"
+    ref_path = repo_cache / "refs" / revision
+    if not ref_path.exists():
+        return False
+    snapshot_id = ref_path.read_text().strip()
+    return (repo_cache / "snapshots" / snapshot_id).exists()
 
 
 def build_prompt(row: pd.Series) -> dict[str, Any]:
-    """Build a Moondream2 diagnostic prompt from a metadata row."""
+    """Build a prompt from required sex, age_years, and recording_site columns."""
     prompt = {
         "task": (
             "Write a diagnosis for this patient by analyzing the respiratory sound "
             "spectrogram."
         ),
-        "patient_sex": _first_available(row, ("sex", "patient_sex")),
-        "patient_age": _first_available(row, ("age", "age_yrs", "patient_age")),
+        "patient_sex": _metadata_value(row, "sex"),
+        "patient_age": _metadata_value(row, "age_years"),
+        "recording_site": str(_metadata_value(row, "recording_site")).strip(),
     }
-
-    record_point = _first_available(row, ("record_point", "recording_point"))
-    if record_point is not None:
-        normalized_record_point = str(record_point).strip().lower()
-        prompt["record_point"] = RECORD_POINT_TRANSLATIONS.get(
-            normalized_record_point,
-            str(record_point).strip(),
-        )
-
     prompt["spectrogram_bins_width"] = json.dumps(WINDOW_WIDTHS)
     return {key: value for key, value in prompt.items() if value is not None}
 
@@ -143,7 +143,7 @@ def prepare_moondream_dataset_5sec(
         audio_path = resolve_audio_path(row, audio_base_path)
 
         # Load and preprocess audio
-        waveform, original_sample_rate = torchaudio.load(audio_path)
+        waveform, original_sample_rate = load_audio_waveform(audio_path)
 
         # Resample if needed
         if original_sample_rate != sampling_rate:
@@ -201,13 +201,64 @@ def prepare_moondream_dataset_5sec(
     return str(dataset_output_dir)
 
 
+def extract_moondream_audio_samples(
+    row: pd.Series,
+    audio_base_path: str,
+    sampling_rate: int = SAMPLING_RATE,
+    overlap_percent: int = 50,
+) -> list[dict[str, Any]]:
+    """Create timed Moondream samples from one metadata row and its audio file."""
+    audio_path = Path(str(_metadata_value(row, "audio_path")))
+    if not audio_path.is_absolute():
+        audio_path = Path(audio_base_path) / audio_path
+    waveform, original_sample_rate = load_audio_waveform(audio_path)
+
+    if original_sample_rate != sampling_rate:
+        resampler = torchaudio.transforms.Resample(original_sample_rate, sampling_rate)
+        waveform = resampler(waveform)
+
+    waveform = waveform.mean(dim=0).unsqueeze(0)  # Convert to mono
+    trimmed = trim_and_norm(waveform.numpy()[0], sample_rate=sampling_rate)
+    prompt = json.dumps(build_prompt(row))
+    sample_id = str(_metadata_value(row, "sample_id"))
+    target_label = _metadata_value(row, "target_label")
+
+    samples = []
+    for clip_idx, (clip, start_seconds, end_seconds) in enumerate(
+        get_5sec_clips(
+            trimmed,
+            sampling_rate,
+            overlap_percent,
+            return_segments=True,
+        )
+    ):
+        image = spectrogram_channels_to_image(
+            extract_spectrogram_channels(clip, sampling_rate)
+        )
+        samples.append(
+            {
+                "sample_id": sample_id,
+                "audio_path": str(audio_path),
+                "clip_index": clip_idx,
+                "start_seconds": start_seconds + 2,
+                "end_seconds": end_seconds + 2,
+                "prompt": prompt,
+                "target_label": target_label,
+                "image": image,
+            }
+        )
+    return samples
+
+
 def patch_generation_mixin(model: Any) -> None:
-    """Patch Moondream's text model so generation APIs are available."""
-    # As of Transformers v4.50+, PreTrainedModel no longer includes
-    # GenerationMixin. The PhiForCausalLM class used in Moondream implements
-    # prepare_inputs_for_generation but does not explicitly inherit from
-    # GenerationMixin, so .generate() can fail. Patch the runtime class and
-    # assign a GenerationConfig so Moondream question answering can generate.
+    """Patch Moondream's text model so generation APIs are available.
+
+    Note: As of Transformers v4.50+, PreTrainedModel no longer includes
+    GenerationMixin. The PhiForCausalLM class used in Moondream implements
+    prepare_inputs_for_generation but does not explicitly inherit from
+    GenerationMixin, so .generate() can fail. Patch the runtime class and
+    assign a GenerationConfig so Moondream question answering can generate.
+    """
     if isinstance(model.text_model, GenerationMixin):
         return
     model.text_model.__class__ = type(
@@ -218,6 +269,25 @@ def patch_generation_mixin(model: Any) -> None:
     model.text_model.generation_config = GenerationConfig.from_model_config(
         model.text_model.config
     )
+
+
+def patch_dynamic_cache_compat() -> None:
+    """Patch Transformers cache compatibility for Moondream2 remote code.
+
+    Note: The pinned Moondream2 revision imports its own Phi model implementation.
+    That code calls DynamicCache.get_usable_length(), which existed in older
+    Transformers releases. The project currently uses Transformers 4.57.x, where
+    DynamicCache exposes get_seq_length() instead.
+    Adding the old method name keeps the pinned model code runnable without
+    changing package versions or editing Hugging Face's cached remote module.
+    """
+    if hasattr(DynamicCache, "get_usable_length"):
+        return
+
+    def get_usable_length(self, new_seq_length: int | None = None, layer_idx: int = 0):
+        return self.get_seq_length(layer_idx)
+
+    DynamicCache.get_usable_length = get_usable_length  # ty: ignore
 
 
 def load_moondream_model(
@@ -234,11 +304,18 @@ def load_moondream_model(
     dtype = torch.float32 if device in {"cpu", "mps"} else torch.bfloat16
     if cache_dir is None:
         cache_dir = os.path.join(os.getcwd(), "temp", "cache")
+    modules_cache = os.path.join(cache_dir, "modules")
+    os.makedirs(modules_cache, exist_ok=True)
+    os.environ["HF_MODULES_CACHE"] = modules_cache
+    dynamic_module_utils.HF_MODULES_CACHE = modules_cache
+    local_files_only = _is_hf_snapshot_cached(cache_dir, base_model, revision)
 
     tokenizer = AutoTokenizer.from_pretrained(
         base_model,
         revision=revision,
         trust_remote_code=True,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
     )
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
@@ -246,21 +323,27 @@ def load_moondream_model(
         trust_remote_code=True,
         attn_implementation="flash_attention_2" if device == "cuda" else None,
         torch_dtype=dtype,
-        device_map={"": device},
         cache_dir=cache_dir,
         use_safetensors=True,
+        local_files_only=local_files_only,
     )
     patch_generation_mixin(model)
+    patch_dynamic_cache_compat()
+
     if base_weights_path is not None:
-        # Optional port of the research notebook's base-weight hot-swap.
-        # The paper repository ships the adapter, so the default path stays
-        # Hugging Face base model + adapter without a hard-coded checkpoint.
+        # The repository ships the adapter, so the default behaviour relies on the
+        # Hugging Face base model + supplied adapter.
+        # This code branch allows base-weight hot-swap.
         state = load_file(base_weights_path)  # read .safetensors safely
         missing, unexpected = model.load_state_dict(
             state, strict=False
         )  # ignore LoRA keys
         print("missing:", len(missing), "unexpected:", len(unexpected))
-    model = PeftModel.from_pretrained(model, adapter_path)
+    model = PeftModel.from_pretrained(
+        model,
+        adapter_path,
+        local_files_only=local_files_only,
+    )
     model.eval()
     model.to(device)
     return model, tokenizer
