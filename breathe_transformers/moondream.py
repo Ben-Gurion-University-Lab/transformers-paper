@@ -203,14 +203,14 @@ def prepare_moondream_dataset_5sec(
 
 def extract_moondream_audio_samples(
     row: pd.Series,
-    audio_base_path: str,
+    metadata_dir: str,
     sampling_rate: int = SAMPLING_RATE,
     overlap_percent: int = 50,
 ) -> list[dict[str, Any]]:
-    """Create timed Moondream samples from one metadata row and its audio file."""
+    """Create timed samples using the row's audio_path relative to metadata_dir."""
     audio_path = Path(str(_metadata_value(row, "audio_path")))
     if not audio_path.is_absolute():
-        audio_path = Path(audio_base_path) / audio_path
+        audio_path = Path(metadata_dir) / audio_path
     waveform, original_sample_rate = load_audio_waveform(audio_path)
 
     if original_sample_rate != sampling_rate:

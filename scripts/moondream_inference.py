@@ -3,6 +3,7 @@
 import argparse
 import csv
 import sys
+from pathlib import Path
 
 import pandas as pd
 from tqdm import tqdm
@@ -34,8 +35,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run Moondream2 adapter inference on local audio metadata."
     )
-    parser.add_argument("--metadata_csv", type=str, required=True)
-    parser.add_argument("--audio_base_path", type=str, default="data")
+    parser.add_argument(
+        "--metadata_csv",
+        type=str,
+        required=True,
+        help=(
+            "CSV with audio_path and prompt metadata columns. Relative audio_path "
+            "values are resolved from the CSV location."
+        ),
+    )
     parser.add_argument(
         "--adapter_path",
         type=str,
@@ -83,7 +91,8 @@ def run_inference(args: argparse.Namespace) -> list[dict[str, object]]:
         cache_dir=args.cache_dir,
         base_weights_path=args.base_weights_path,
     )
-    metadata = pd.read_csv(args.metadata_csv)
+    metadata_csv = Path(args.metadata_csv)
+    metadata = pd.read_csv(metadata_csv)
 
     rows = []
     for _, metadata_row in tqdm(
@@ -94,7 +103,7 @@ def run_inference(args: argparse.Namespace) -> list[dict[str, object]]:
     ):
         for sample in extract_moondream_audio_samples(
             metadata_row,
-            audio_base_path=args.audio_base_path,
+            metadata_dir=str(metadata_csv.parent),
             sampling_rate=args.sampling_rate,
             overlap_percent=args.overlap_percent,
         ):
