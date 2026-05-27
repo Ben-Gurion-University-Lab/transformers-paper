@@ -1,6 +1,8 @@
 # Transformer Architectures for Respiratory Sound Analysis and Multimodal Diagnosis
 
-This repository contains supporting code for the "Transformer Architectures for Respiratory Sound Analysis and Multimodal Diagnosis" paper. It contains the shared Python library code, sample WAV files, model files, and command-line scripts for running AST and Moondream2 asthma inference and evaluation.
+The repository holds the code accompanying the "Transformer Architectures for Respiratory Sound Analysis and Multimodal Diagnosis" paper.
+
+It contains the shared Python library, sample WAV files, model files, and command-line scripts for running AST and Moondream2 asthma inference and evaluation.
 
 ## Prerequisites
 
