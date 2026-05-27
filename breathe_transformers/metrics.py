@@ -96,7 +96,7 @@ def binary_classification_metrics(
 
 
 def binary_metrics_from_columns(
-    frame: pd.DataFrame,
+    df: pd.DataFrame,
     label_column: str,
     prediction_column: str,
     positive_label: str = ASTHMA_LABEL,
@@ -105,8 +105,8 @@ def binary_metrics_from_columns(
 ) -> dict[str, float | int]:
     """Compute binary metrics from dataframe columns."""
     return binary_classification_metrics(
-        frame[label_column],
-        frame[prediction_column],
+        df[label_column],
+        df[prediction_column],
         positive_label=positive_label,
         negative_label=negative_label,
         json_field=json_field,
