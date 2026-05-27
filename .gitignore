@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.virtual_documents/
+.venv/
+venv/
+.ruff_cache/
+.rumdl_cache/
+.DS_Store
+temp/
+temp_*/
+wandb/

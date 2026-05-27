@@ -1,0 +1,11 @@
+sample_id,source_sample_id,patient_id,audio_path,source_file_name,sex,age_years,recording_site,target_label,record_quality
+sample_001,104,patient_7738,sample_audio/sample_001.wav,780fad416289c6e303023b2c7d3c172d.wav,M,14,trachea,asthma,good
+sample_002,240,patient_8801,sample_audio/sample_002.wav,a77610d429e27dfaca2ca4128adce110.wav,M,14,trachea,asthma,average
+sample_003,256,patient_8709,sample_audio/sample_003.wav,d7a37d58e619e218251f32089ac2af61.wav,M,14,trachea,asthma,average
+sample_004,262,patient_8818,sample_audio/sample_004.wav,6165350a5249c17b5cdb839307231811.wav,M,10,trachea,asthma,good
+sample_005,279,patient_8799,sample_audio/sample_005.wav,ff5ddf03997da5cead72f850aaa659ac.wav,M,14,trachea,asthma,average
+sample_006,298,patient_7635,sample_audio/sample_006.wav,65ac35b08636b56f3dbad6cbcbef2b69.wav,M,38,trachea,not asthma,good
+sample_007,383,patient_8776,sample_audio/sample_007.wav,2781f0706b6d6501db3c7971966e9fd8.wav,M,38,trachea,not asthma,average
+sample_008,440,patient_9304,sample_audio/sample_008.wav,e8737d0f621e52807f86e41a53dc2278.wav,M,20,trachea,not asthma,average
+sample_009,443,patient_8278,sample_audio/sample_009.wav,1cdf2137ef569875417f1dd974d6cdd7.wav,M,37,trachea,not asthma,average
+sample_010,487,patient_8144,sample_audio/sample_010.wav,ad6969cb765056fe861857ea74021f91.wav,F,38,trachea,not asthma,good
