@@ -1,0 +1,34 @@
+# Model parameters
+model_name: "MIT/ast-finetuned-audioset-10-10-0.4593"
+
+# Training parameters
+num_train_epochs: 16
+per_device_train_batch_size: 16  # Keep small batches for stability
+learning_rate: 0.000008  # Keep conservative learning rate
+warmup_ratio: 0.25  # Keep extended warmup
+weight_decay: 0.03  # Keep strong regularization
+logging_steps: 1  # Log every step for dense graphs
+eval_steps: 10  # More frequent evaluation
+save_steps: 50
+gradient_accumulation_steps: 4  # Keep increased accumulation
+max_grad_norm: 1.0  # Relaxed gradient clipping (up from 0.3)
+fp16: true
+
+# Early stopping
+early_stopping_patience: 5
+
+# Scheduler parameters
+scheduler_type: "cosine"
+scheduler_warmup_steps: 150
+scheduler_decay_steps: null
+scheduler_decay_rate: 0.1
+
+# Dataloader parameters
+num_workers: 4
+pin_memory: true
+
+# System parameters
+save_total_limit: 2
+
+# 5-second specific parameters
+audio_length: 5  # Explicitly note that we're using 5-second clips

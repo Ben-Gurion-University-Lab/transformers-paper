@@ -2,10 +2,12 @@
 
 import argparse
 import csv
+import json
 import sys
 from pathlib import Path
 
 import pandas as pd
+from PIL import Image
 from tqdm import tqdm
 
 from breathe_transformers.moondream import (
@@ -35,14 +37,24 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run Moondream2 adapter inference on local audio metadata."
     )
-    parser.add_argument(
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
         "--metadata_csv",
         type=str,
-        required=True,
         help=(
             "CSV with audio_path and prompt metadata columns. Relative audio_path "
             "values are resolved from the CSV location."
         ),
+    )
+    input_group.add_argument(
+        "--data_json",
+        type=str,
+        help="Moondream2 data.json file",
+    )
+    parser.add_argument(
+        "--images_folder",
+        type=str,
+        help="Image folder for data.json inference.",
     )
     parser.add_argument(
         "--adapter_path",
@@ -62,7 +74,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base_weights_path", type=str)
     parser.add_argument("--sampling_rate", type=int, default=SAMPLING_RATE)
     parser.add_argument("--overlap_percent", type=int, default=50)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.data_json and not args.images_folder:
+        parser.error("--images_folder is required with --data_json")
+    return args
 
 
 def write_csv_rows(rows: list[dict[str, object]]) -> None:
@@ -81,8 +96,8 @@ def write_stdout_rows(rows: list[dict[str, object]]) -> None:
         )
 
 
-def run_inference(args: argparse.Namespace) -> list[dict[str, object]]:
-    """Run Moondream2 inference over metadata rows."""
+def load_model(args: argparse.Namespace):
+    """Load the Moondream2 model for inference."""
     model, tokenizer = load_moondream_model(
         adapter_path=args.adapter_path,
         base_model=args.base_model,
@@ -91,6 +106,11 @@ def run_inference(args: argparse.Namespace) -> list[dict[str, object]]:
         cache_dir=args.cache_dir,
         base_weights_path=args.base_weights_path,
     )
+    return model, tokenizer
+
+
+def run_audio_inference(args: argparse.Namespace, model, tokenizer) -> list[dict[str, object]]:
+    """Run Moondream2 inference over audio rows."""
     metadata_csv = Path(args.metadata_csv)
     metadata = pd.read_csv(metadata_csv)
 
@@ -128,6 +148,56 @@ def run_inference(args: argparse.Namespace) -> list[dict[str, object]]:
                 }
             )
     return rows
+
+
+def answer_label(sample: dict[str, object]) -> str:
+    """Return the target label from a Moondream2 conversation row."""
+    conversations = sample["conversations"]
+    answer = conversations[1]["value"]  # ty: ignore
+    try:
+        parsed = json.loads(answer)
+    except json.JSONDecodeError:
+        return str(answer)
+    return str(parsed.get("diagnosis", answer))
+
+
+def run_image_inference(args: argparse.Namespace, model, tokenizer) -> list[dict[str, object]]:
+    """Run Moondream2 inference over image rows."""
+    data_json = Path(args.data_json)
+    images_folder = Path(args.images_folder)
+    samples = json.loads(data_json.read_text())
+
+    rows = []
+    for sample in tqdm(samples, desc="Running inference", file=sys.stderr):
+        metadata = sample.get("metadata", {})
+        prompt = sample["conversations"][0]["value"]
+        image = Image.open(images_folder / sample["image"]).convert("RGB")
+        model_answer = answer_sample(
+            model,
+            tokenizer,
+            {"image": image, "qa": [{"question": prompt, "answer": ""}]},
+        )
+        rows.append(
+            {
+                "sample_id": metadata.get("sample_id", sample.get("id", "")),
+                "audio_path": metadata.get("audio_path", ""),
+                "clip_index": metadata.get("clip_index", ""),
+                "start_seconds": metadata.get("start_seconds", ""),
+                "end_seconds": metadata.get("end_seconds", ""),
+                "target_label": metadata.get("target_label", answer_label(sample)),
+                "prompt": prompt,
+                "model_answer": model_answer,
+            }
+        )
+    return rows
+
+
+def run_inference(args: argparse.Namespace) -> list[dict[str, object]]:
+    """Run Moondream2 inference over the selected input mode."""
+    model, tokenizer = load_model(args)
+    if getattr(args, "data_json", None):
+        return run_image_inference(args, model, tokenizer)
+    return run_audio_inference(args, model, tokenizer)
 
 
 def main() -> None:

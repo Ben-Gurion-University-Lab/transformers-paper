@@ -53,3 +53,13 @@ Inference and evaluation write results to stdout. Save predictions and metrics w
 python scripts/moondream_inference.py --adapter_path models/moondream_asthma_adapter --metadata_csv data/sample_metadata.csv --output_mode csv > moondream_predictions.csv
 python scripts/evaluate_moondream.py --predictions_csv moondream_predictions.csv > moondream_metrics.json
 ```
+
+### Training on a CUDA host
+
+The Moondream2 adapter training script requires CUDA with FlashAttention2 and bitsandbytes.
+On a CUDA host, install the extra dependency group and FlashAttention before running `scripts/train_moondream.py`:
+
+```bash
+uv sync --extra cuda
+uv pip install flash-attn --no-build-isolation
+```
