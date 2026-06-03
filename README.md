@@ -24,10 +24,12 @@ uv sync
 ## Repository Contents
 
 ```text
-├── breathe_transformers/    shared Python implementation
+├── breathe_transformers/    shared Python library code
 ├── data/                    sample WAV files and sample metadata
-├── models/                  pre-trained AST model files and Moondream2 adapter files
-└── scripts/                 inference and evaluation scripts
+├── hparams/                 sample training configuration artifacts
+├── models/                  AST model files, Moondream2 adapter files, and model notes
+├── notebooks/               notebook reproducing the training workflow on a public dataset
+└── scripts/                 inference, evaluation, dataset preparation and training CLIs
 ```
 
 ## Sample Workflow
@@ -50,4 +52,4 @@ Run Moondream2 on the sample metadata:
 python scripts/moondream_inference.py --adapter_path models/moondream_asthma_adapter --metadata_csv data/sample_metadata.csv --output_mode csv
 ```
 
-See [models/README.md](models/README.md) for model-specific commands, Moondream2 cache behavior, metadata path handling, and examples for saving predictions and metrics.
+See [models/README.md](models/README.md) for model-specific commands, metadata path handling, cache behavior and examples for saving predictions and metrics.
