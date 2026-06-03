@@ -3,6 +3,7 @@
 import json
 import math
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,11 +25,15 @@ from transformers import (
 from transformers.cache_utils import DynamicCache
 from transformers.generation.utils import GenerationMixin
 
-from breathe_transformers.ast import resolve_audio_path
 from breathe_transformers.audio_utils import (
     get_5sec_clips,
     load_audio_waveform,
     trim_and_norm,
+)
+from breathe_transformers.metadata import (
+    metadata_value as _metadata_value,
+    resolve_audio_path,
+    validate_metadata_columns,
 )
 from breathe_transformers.torch_utils import get_default_device
 
@@ -39,20 +44,39 @@ WINDOW_WIDTHS = [0.025, 0.1, 0.175]
 SAMPLING_RATE = 16000
 
 
-def _metadata_value(row: pd.Series, column: str) -> Any:
-    """Return a pandas metadata value as a plain Python scalar when possible."""
-    value = row[column]
-    return value.item() if isinstance(value, np.generic) else value  # ty: ignore
+def _cached_hf_snapshot_path(
+    cache_dir: str, model_name: str, revision: str
+) -> str | None:
+    """Return the cached Hugging Face snapshot path for a pinned revision."""
+    repo_cache = Path(cache_dir) / f"models--{model_name.replace('/', '--')}"
+    ref_path = repo_cache / "refs" / revision
+    if not ref_path.exists():
+        return None
+    snapshot_id = ref_path.read_text().strip()
+    snapshot_path = repo_cache / "snapshots" / snapshot_id
+    return str(snapshot_path) if snapshot_path.exists() else None
 
 
 def _is_hf_snapshot_cached(cache_dir: str, model_name: str, revision: str) -> bool:
     """Return whether a Hugging Face snapshot ref exists in the local cache."""
-    repo_cache = Path(cache_dir) / f"models--{model_name.replace('/', '--')}"
-    ref_path = repo_cache / "refs" / revision
-    if not ref_path.exists():
-        return False
-    snapshot_id = ref_path.read_text().strip()
-    return (repo_cache / "snapshots" / snapshot_id).exists()
+    return _cached_hf_snapshot_path(cache_dir, model_name, revision) is not None
+
+
+@contextmanager
+def disable_transformers_adapter_auto_detection():
+    """Skip Transformers' optional PEFT adapter probe while loading a base model."""
+    import transformers.modeling_utils as modeling_utils
+    import transformers.models.auto.auto_factory as auto_factory
+
+    original_auto = auto_factory.is_peft_available
+    original_modeling = modeling_utils.is_peft_available
+    auto_factory.is_peft_available = lambda: False  # ty: ignore
+    modeling_utils.is_peft_available = lambda: False  # ty: ignore
+    try:
+        yield
+    finally:
+        auto_factory.is_peft_available = original_auto
+        modeling_utils.is_peft_available = original_modeling
 
 
 def build_prompt(row: pd.Series) -> dict[str, Any]:
@@ -118,12 +142,11 @@ def spectrogram_channels_to_image(specs: list[np.ndarray]) -> Image.Image:
 
 
 def prepare_moondream_dataset_5sec(
-    csv_path: str,
-    audio_base_path: str,
+    metadata_csv: str,
     output_dir: str,
     sampling_rate: int = SAMPLING_RATE,
-    dataset_name: str = "asthma_test",
-    classification_column: str = "asthma_key",
+    dataset_name: str = "moondream_dataset",
+    label_column: str = "target_label",
     overlap_percent: int = 50,
 ) -> str:
     """Process audio files for Moondream LoRA fine-tuning using 5-second clips.
@@ -131,7 +154,20 @@ def prepare_moondream_dataset_5sec(
     This mimics the ESC-50 dataset format which uses 5-second audio samples.
     """
     # Load dataset metadata
-    metadata = pd.read_csv(csv_path)
+    metadata_csv_path = Path(metadata_csv)
+    metadata = pd.read_csv(metadata_csv_path)
+    required_columns = [
+        "sample_id",
+        "audio_path",
+        "target_label",
+        "sex",
+        "age_years",
+        "recording_site",
+    ]
+    if label_column not in required_columns:
+        required_columns.append(label_column)
+    validate_metadata_columns(metadata, required_columns, metadata_csv_path)
+    metadata_dir = metadata_csv_path.resolve().parent
 
     # Create dataset-specific output directory
     dataset_output_dir = Path(output_dir) / dataset_name
@@ -140,7 +176,7 @@ def prepare_moondream_dataset_5sec(
 
     entries = []
     for _, row in tqdm(metadata.iterrows(), total=len(metadata)):
-        audio_path = resolve_audio_path(row, audio_base_path)
+        audio_path = resolve_audio_path(row, metadata_dir)
 
         # Load and preprocess audio
         waveform, original_sample_rate = load_audio_waveform(audio_path)
@@ -162,15 +198,14 @@ def prepare_moondream_dataset_5sec(
 
         # Split into 5-second clips (matching ESC-50 format)
         clips = get_5sec_clips(trimmed, sampling_rate, overlap_percent)
-        row_id = row["id"] if "id" in row and pd.notna(row["id"]) else audio_path.stem  # ty: ignore
-        mis_id = row.get("mis_id", "local")
+        row_id = str(_metadata_value(row, "sample_id"))
 
         # Create prompt
         prompt = build_prompt(row)
 
         # Process each clip
         for clip_idx, clip in enumerate(clips):
-            sample_id = f"{row_id}_{mis_id}_{clip_idx}"
+            sample_id = f"{row_id}_{clip_idx}"
             image_path = image_dir / f"{sample_id}.tiff"
 
             # Extract spectrograms for each window width
@@ -183,13 +218,19 @@ def prepare_moondream_dataset_5sec(
             entries.append(
                 {
                     "id": sample_id,
-                    "image": f"images/{sample_id}.tiff",
+                    "image": f"{sample_id}.tiff",
+                    "metadata": {
+                        "sample_id": row_id,
+                        "audio_path": str(audio_path),
+                        "clip_index": clip_idx,
+                        "target_label": _metadata_value(row, "target_label"),
+                    },
                     "conversations": [
                         {"from": "human", "value": json.dumps(prompt)},
                         {
                             "from": "gpt",
                             "value": json.dumps(
-                                {"diagnosis": row[classification_column]}
+                                {"diagnosis": _metadata_value(row, label_column)}
                             ),
                         },
                     ],
@@ -317,16 +358,17 @@ def load_moondream_model(
         cache_dir=cache_dir,
         local_files_only=local_files_only,
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        revision=revision,
-        trust_remote_code=True,
-        attn_implementation="flash_attention_2" if device == "cuda" else None,
-        torch_dtype=dtype,
-        cache_dir=cache_dir,
-        use_safetensors=True,
-        local_files_only=local_files_only,
-    )
+    with disable_transformers_adapter_auto_detection():
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            revision=revision,
+            trust_remote_code=True,
+            attn_implementation="eager",
+            torch_dtype=dtype,
+            cache_dir=cache_dir,
+            use_safetensors=True,
+            local_files_only=local_files_only,
+        )
     patch_generation_mixin(model)
     patch_dynamic_cache_compat()
 
