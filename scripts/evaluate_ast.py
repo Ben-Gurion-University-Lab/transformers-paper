@@ -26,9 +26,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
     """Evaluate clip-level AST predictions."""
     predictions = pd.read_csv(args.predictions_csv)
     metadata = pd.read_csv(args.metadata_csv)
+    join_columns = [args.sample_id_column]
+    if "clip_index" in predictions.columns and "clip_index" in metadata.columns:
+        join_columns.append("clip_index")
     merged = predictions.merge(  # ty: ignore
-        metadata[[args.sample_id_column, args.label_column]],
-        on=args.sample_id_column,
+        metadata[join_columns + [args.label_column]],
+        on=join_columns,
         how="inner",
         validate="many_to_one",
     )

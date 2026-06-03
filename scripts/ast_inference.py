@@ -5,11 +5,14 @@ import csv
 import sys
 from pathlib import Path
 
+import pandas as pd
 import torch
 from tqdm.auto import tqdm
 from transformers import ASTFeatureExtractor
 
 from breathe_transformers.ast import (
+    ASTDataset,
+    ASTDatasetConfig,
     extract_ast_audio_features,
     load_ast_model,
 )
@@ -38,6 +41,16 @@ def parse_args() -> argparse.Namespace:
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument("--audio_path", type=str, help="Path to one WAV file")
     input_group.add_argument("--audio_dir", type=str, help="Directory of WAV files")
+    input_group.add_argument(
+        "--features_dir",
+        type=str,
+        help="Directory of AST feature tensors",
+    )
+    parser.add_argument(
+        "--metadata_csv",
+        type=str,
+        help="AST metadata CSV. Required with --features_dir.",
+    )
     parser.add_argument(
         "--output_mode",
         choices=["stdout", "csv"],
@@ -55,7 +68,10 @@ def parse_args() -> argparse.Namespace:
         choices=["cuda", "mps", "cpu"],
         help="Device to run inference on",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.features_dir and not args.metadata_csv:
+        parser.error("--metadata_csv is required with --features_dir")
+    return args
 
 
 def resolve_audio_paths(args: argparse.Namespace) -> list[Path]:
@@ -120,15 +136,25 @@ def run_raw_audio_inference(
 
     if not clip_rows:
         raise SystemExit("No five-second clips were produced from the audio input.")
+    return classify_rows(clip_rows, model, device, args.batch_size)
 
+
+def classify_rows(
+    clip_rows: list[dict[str, object]],
+    model: torch.nn.Module,
+    device: str,
+    batch_size: int,
+) -> list[dict[str, object]]:
+    """Run AST classification over feature rows."""
     output_rows = []
-    batch_ranges = range(0, len(clip_rows), args.batch_size)
+    batch_ranges = range(0, len(clip_rows), batch_size)
     id2label = {
-        int(label_id): label for label_id, label in model.config.id2label.items()  # ty: ignore
+        int(label_id): label
+        for label_id, label in model.config.id2label.items()  # ty: ignore
     }
     for start in tqdm(batch_ranges, desc="Running inference", file=sys.stderr):
-        batch_rows = clip_rows[start : start + args.batch_size]
-        input_values = torch.stack([row["input_values"] for row in batch_rows]).to(
+        batch_rows = clip_rows[start : start + batch_size]
+        input_values = torch.stack([row["input_values"] for row in batch_rows]).to(  # ty: ignore
             device
         )
         with torch.no_grad():
@@ -144,13 +170,58 @@ def run_raw_audio_inference(
                     "sample_id": row["sample_id"],
                     "audio_path": row["audio_path"],
                     "clip_index": row["clip_index"],
-                    "start_seconds": round(float(row["start_seconds"]), 3),
-                    "end_seconds": round(float(row["end_seconds"]), 3),
+                    "start_seconds": (
+                        ""
+                        if row["start_seconds"] == ""
+                        else round(float(row["start_seconds"]), 3)  # ty: ignore
+                    ),
+                    "end_seconds": (
+                        ""
+                        if row["end_seconds"] == ""
+                        else round(float(row["end_seconds"]), 3)  # ty: ignore
+                    ),
                     "predicted_label": id2label[predicted_id],
                     "predicted_score": float(probabilities[row_idx, predicted_id]),
                 }
             )
     return output_rows
+
+
+def run_feature_inference(
+    args: argparse.Namespace,
+    model: torch.nn.Module,
+    device: str,
+) -> list[dict[str, object]]:
+    """Run inference over AST feature tensors."""
+    metadata = pd.read_csv(args.metadata_csv)
+    dataset = ASTDataset(
+        ASTDatasetConfig(
+            features_dir=args.features_dir,
+            metadata_path=args.metadata_csv,
+        )
+    )
+    clip_rows = []
+    for index, row in tqdm(
+        metadata.iterrows(),
+        total=len(metadata),
+        desc="Loading features",
+        file=sys.stderr,
+    ):
+        item = dataset[index]
+        clip_rows.append(
+            {
+                "input_values": item["input_values"].squeeze(),
+                "sample_id": row["sample_id"],
+                "audio_path": row.get("audio_path", ""),
+                "clip_index": row.get("clip_index", ""),
+                "start_seconds": row.get("start_seconds", ""),
+                "end_seconds": row.get("end_seconds", ""),
+            }
+        )
+
+    if not clip_rows:
+        raise SystemExit("No features were found for inference.")
+    return classify_rows(clip_rows, model, device, args.batch_size)
 
 
 def main() -> None:
@@ -160,7 +231,10 @@ def main() -> None:
     print(f"Using device: {device}", file=sys.stderr)
 
     model, _ = load_ast_model(args.model_path, device=device)
-    rows = run_raw_audio_inference(args, model, device)
+    if args.features_dir:
+        rows = run_feature_inference(args, model, device)
+    else:
+        rows = run_raw_audio_inference(args, model, device)
     if args.output_mode == "csv":
         write_rows(rows, RAW_OUTPUT_CSV_FIELDNAMES)
     else:
