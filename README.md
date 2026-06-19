@@ -1,55 +1,59 @@
-# Transformer Architectures for Respiratory Sound Analysis and Multimodal Diagnosis
+# Transformer architectures for respiratory sound analysis and multimodal diagnosis
 
-The repository holds the code accompanying the "Transformer Architectures for Respiratory Sound Analysis and Multimodal Diagnosis" paper.
+The repository holds the code accompanying the "Transformer architectures for respiratory sound analysis and multimodal diagnosis" paper.
 
-It contains the shared Python library, sample WAV files, model files, and command-line scripts for running AST and Moondream2 asthma inference and evaluation.
+It contains Python code, sample audio data, model artifacts, and notebooks for AST and Moondream2 respiratory sound experiments on the "Asthma vs Not Asthma" classification task.
 
-## Prerequisites
+## Contents
 
-- `git-lfs`, required because sample audio and model weights are stored with Git LFS.
-- `uv`, used to install the Python environment.
+```text
+├── breathe_transformers/    shared Python library
+├── data/                    deidentified sample WAV files and metadata, dataset metadata
+├── hparams/                 training configuration artifacts
+├── models/                  AST model files, Moondream2 adapter files, and model notes
+├── notebooks/               training workflow and figure reproduction notebooks
+├── scripts/                 dataset preparation, training, inference, and evaluation CLIs
+├── CITATION.bib             citation metadata
+├── LICENSE                  repository license
+├── pyproject.toml           project dependencies
+└── uv.lock                  locked dependency versions
+```
 
-After cloning, make sure LFS files are present:
+## Data
+
+This repository includes anonymized sample WAV files, sample metadata and dataset metadata for inference and figure reproduction.
+
+See details in [data/README.md](data/README.md).
+
+## Installation
+
+LFS must be installed on the machine to pull the model weights and adapter files.
 
 ```bash
 git lfs pull
-```
-
-Install dependencies:
-
-```bash
 uv sync
 ```
 
-## Repository Contents
+## Usage
 
-```text
-├── breathe_transformers/    shared Python library code
-├── data/                    sample WAV files and sample metadata
-├── hparams/                 sample training configuration artifacts
-├── models/                  AST model files, Moondream2 adapter files, and model notes
-├── notebooks/               notebook reproducing the training workflow on a public dataset
-└── scripts/                 inference, evaluation, dataset preparation and training CLIs
-```
-
-## Sample Workflow
-
-Run AST on one WAV file:
+Run AST inference:
 
 ```bash
 python scripts/ast_inference.py --model_path models/ast_asthma/final_model --audio_path data/sample_audio/sample_001.wav
 ```
 
-Run AST on the sample WAV directory:
-
-```bash
-python scripts/ast_inference.py --model_path models/ast_asthma/final_model --audio_dir data/sample_audio
-```
-
-Run Moondream2 on the sample metadata:
+Run Moondream2 inference:
 
 ```bash
 python scripts/moondream_inference.py --adapter_path models/moondream_asthma_adapter --metadata_csv data/sample_metadata.csv --output_mode csv
 ```
 
-See [models/README.md](models/README.md) for model-specific commands, metadata path handling, cache behavior and examples for saving predictions and metrics.
+See [models/README.md](models/README.md) for evaluation commands and model-specific notes.
+
+## Citation
+
+Cite this work with [CITATION.bib](CITATION.bib).
+
+## License
+
+See [LICENSE](LICENSE).
