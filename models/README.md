@@ -1,65 +1,68 @@
 # Models
 
-This directory contains the model artifacts used by the sample inference scripts.
+Model artifacts used by the sample inference and evaluation scripts.
 
-## AST
+## Contents
 
-`ast_asthma/final_model/` is a trained 5-second AST asthma classifier.
+```text
+├── ast_asthma/final_model/       trained 5-second AST classifier
+└── moondream_asthma_adapter/     LoRA adapter for Moondream2
+```
 
-Use it with:
+Training configuration artifacts are in [`../hparams/`](../hparams/).
+
+## Method summary
+
+Input recordings are normalized and split into 5-second clips before model inference.
+
+The AST classifier takes audio-derived spectrograms and predicts `asthma` or `not asthma`.
+
+The Moondream2 adapter takes audio-derived spectrogram images plus structured metadata: sex, age, and recording point. Its output is parsed as JSON and reduced to the same two labels.
+
+The evaluation scripts compare predicted labels with `target_label` and compute accuracy, sensitivity, specificity, F1-score, and Youden index.
+
+## Inference
+
+Run AST on one WAV file:
 
 ```bash
 python scripts/ast_inference.py --model_path models/ast_asthma/final_model --audio_path data/sample_audio/sample_001.wav
+```
+
+Run AST on the sample WAV directory:
+
+```bash
 python scripts/ast_inference.py --model_path models/ast_asthma/final_model --audio_dir data/sample_audio
 ```
 
-Inference and evaluation write results to stdout. Use `--output_mode csv` and redirect stdout to save files:
+Run Moondream2 on the sample metadata:
+
+```bash
+python scripts/moondream_inference.py --adapter_path models/moondream_asthma_adapter --metadata_csv data/sample_metadata.csv --output_mode csv
+```
+
+Moondream2 uses `vikhyatk/moondream2` as the base model. The adapter expects the `2024-08-26` revision.
+
+## Evaluation
+
+Save AST predictions and metrics:
 
 ```bash
 python scripts/ast_inference.py --model_path models/ast_asthma/final_model --audio_dir data/sample_audio --output_mode csv > ast_predictions.csv
 python scripts/evaluate_ast.py --predictions_csv ast_predictions.csv --metadata_csv data/sample_metadata.csv > ast_metrics.json
 ```
 
-## Moondream2
-
-`moondream_asthma_adapter/` is a LoRA adapter for the Moondream2 asthma classifier.
-
-It requires the Hugging Face base model:
-
-- `vikhyatk/moondream2`
-- revision: `2024-08-26`
-
-Use it with:
-
-```bash
-python scripts/moondream_inference.py --adapter_path models/moondream_asthma_adapter --metadata_csv data/sample_metadata.csv --output_mode csv
-```
-
-For deterministic offline runs after `temp/cache` has been populated, set:
-
-```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-python scripts/moondream_inference.py --adapter_path models/moondream_asthma_adapter --metadata_csv data/sample_metadata.csv --cache_dir temp/cache --output_mode csv
-```
-
-Without those variables, Hugging Face may still make optional metadata requests even when the model files are already cached which will fail without internet connection.
-
-Moondream2 reads audio files from the metadata CSV's `audio_path` column.
-e.g. for `data/sample_metadata.csv`, `sample_audio/sample_001.wav` resolves to `data/sample_audio/sample_001.wav`.
-
-Inference and evaluation write results to stdout. Save predictions and metrics with shell redirection:
+Save Moondream2 predictions and metrics:
 
 ```bash
 python scripts/moondream_inference.py --adapter_path models/moondream_asthma_adapter --metadata_csv data/sample_metadata.csv --output_mode csv > moondream_predictions.csv
 python scripts/evaluate_moondream.py --predictions_csv moondream_predictions.csv > moondream_metrics.json
 ```
 
-### Training on a CUDA host
+## Offline Moondream2
 
-The Moondream2 adapter training script requires CUDA with FlashAttention2 and bitsandbytes.
-On a CUDA host, install the extra dependency group and FlashAttention before running `scripts/train_moondream.py`:
+After the base model is cached locally, set:
 
 ```bash
-uv sync --extra cuda
-uv pip install flash-attn --no-build-isolation
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 ```

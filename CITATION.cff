@@ -1,6 +1,0 @@
-cff-version: 1.2.0
-title: "Transformer Architectures for Respiratory Sound Analysis and Multimodal Diagnosis"
-authors:
-  - family-names: "Aptekarev"
-    given-names: "Theodore"
-message: "If you use this repository, cite the accompanying paper."
